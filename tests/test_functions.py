@@ -25,7 +25,6 @@ Test cases for the python API for tsdate.
 """
 import collections
 import json
-import math
 import unittest
 import warnings
 
@@ -51,7 +50,7 @@ from tsdate.prior import fill_priors
 from tsdate.prior import gamma_approx
 from tsdate.prior import PriorParams
 from tsdate.prior import SpansBySamples
-from tsdate.util import nodes_time
+from tsdate.util import nodes_time_unconstrained
 
 
 class TestBasicFunctions(unittest.TestCase):
@@ -565,7 +564,8 @@ class TestPriorVals(unittest.TestCase):
         priors.add(ts.num_samples, approximate=False)
         grid = np.linspace(0, 3, 3)
         mixture_priors = priors.get_mixture_prior_params(span_data)
-        prior_vals = fill_priors(mixture_priors, grid, ts, prior_distr=prior_distr)
+        Ne = 1
+        prior_vals = fill_priors(mixture_priors, grid, ts, Ne, prior_distr=prior_distr)
         return prior_vals
 
     def test_one_tree_n2(self):
@@ -660,15 +660,15 @@ class TestLikelihoodClass(unittest.TestCase):
     def test_no_theta_class(self):
         ts = utility_functions.two_tree_mutation_ts()
         grid = np.array([0, 1, 2])
-        lik = Likelihoods(ts, grid, theta=None)
+        lik = Likelihoods(ts, grid, mutation_rate=None)
         self.assertRaises(RuntimeError, lik.precalculate_mutation_likelihoods)
 
     def test_precalc_lik_lower(self):
         ts = utility_functions.single_tree_ts_n3()
         grid = np.array([0, 1, 2])
         eps = 0
-        theta = 1
-        lik = Likelihoods(ts, grid, theta, eps)
+        mut_rate = 1
+        lik = Likelihoods(ts, grid, mut_rate, eps)
         for method in (0, 1, 2):
             # TODO: Remove this loop and hard-code one of the methods after perf testing
             lik.precalculate_mutation_likelihoods(unique_method=method)
@@ -677,7 +677,7 @@ class TestLikelihoodClass(unittest.TestCase):
             dt = grid
             num_muts = 0
             n_internal_edges = 0
-            expected_lik_dt = self.poisson(dt * (theta / 2 * span), num_muts)
+            expected_lik_dt = self.poisson(dt * (mut_rate / 2 * span), num_muts)
             for edge in ts.edges():
                 if ts.node(edge.child).is_sample():
                     self.assertRaises(AssertionError, lik.get_mut_lik_lower_tri, edge)
@@ -703,13 +703,13 @@ class TestLikelihoodClass(unittest.TestCase):
         ts = utility_functions.two_tree_mutation_ts()
         grid = np.array([0, 1, 2])
         eps = 0
-        theta = 1
+        mut_rate = 1
         for L, pois in [
             (Likelihoods, self.poisson),
             (LogLikelihoods, self.log_poisson),
         ]:
             for normalize in (True, False):
-                lik = L(ts, grid, theta, eps, normalize=normalize)
+                lik = L(ts, grid, mut_rate, eps, normalize=normalize)
                 dt = grid
                 for num_threads in (None, 1, 2):
                     n_internal_edges = 0
@@ -728,7 +728,9 @@ class TestLikelihoodClass(unittest.TestCase):
                                 self.fail("Unexpected edge")
                             span = edge.right - edge.left
                             expected_lik_dt = pois(
-                                dt * (theta / 2 * span), num_muts, normalize=normalize
+                                dt * (mut_rate / 2 * span),
+                                num_muts,
+                                normalize=normalize,
                             )
                             upper_tri = lik.get_mut_lik_upper_tri(edge)
 
@@ -745,8 +747,8 @@ class TestLikelihoodClass(unittest.TestCase):
         ts = utility_functions.two_tree_mutation_ts()
         grid = np.array([0, 1, 2])
         eps = 0
-        theta = 1
-        lik = Likelihoods(ts, grid, theta, eps)
+        mut_rate = 1
+        lik = Likelihoods(ts, grid, mut_rate, eps)
         lik.precalculate_mutation_likelihoods()
         for e in ts.edges():
             if e.child == 3 and e.parent == 4:
@@ -754,7 +756,7 @@ class TestLikelihoodClass(unittest.TestCase):
                 exp_span = 0.2
                 self.assertEqual(e.right - e.left, exp_span)
                 self.assertEqual(lik.mut_edges[e.id], exp_branch_muts)
-                pois_lambda = grid * theta / 2 * exp_span
+                pois_lambda = grid * mut_rate / 2 * exp_span
                 cumul_pois = np.cumsum(self.poisson(pois_lambda, exp_branch_muts))
                 lower_tri = lik.get_mut_lik_lower_tri(e)
                 self.assertTrue(
@@ -768,7 +770,7 @@ class TestLikelihoodClass(unittest.TestCase):
     def test_no_theta_class_loglikelihood(self):
         ts = utility_functions.two_tree_mutation_ts()
         grid = np.array([0, 1, 2])
-        lik = LogLikelihoods(ts, grid, theta=None)
+        lik = LogLikelihoods(ts, grid, mutation_rate=None)
         self.assertRaises(RuntimeError, lik.precalculate_mutation_likelihoods)
 
     def test_logsumexp(self):
@@ -781,9 +783,9 @@ class TestLikelihoodClass(unittest.TestCase):
         ts = utility_functions.two_tree_mutation_ts()
         grid = np.array([0, 1, 2])
         eps = 0
-        theta = 1
-        lik = Likelihoods(ts, grid, theta, eps)
-        loglik = LogLikelihoods(ts, grid, theta=theta, eps=eps)
+        mut_rate = 1
+        lik = Likelihoods(ts, grid, mut_rate, eps)
+        loglik = LogLikelihoods(ts, grid, mutation_rate=mut_rate, eps=eps)
         lik.precalculate_mutation_likelihoods()
         loglik.precalculate_mutation_likelihoods()
         for e in ts.edges():
@@ -793,7 +795,7 @@ class TestLikelihoodClass(unittest.TestCase):
                 self.assertEqual(e.right - e.left, exp_span)
                 self.assertEqual(lik.mut_edges[e.id], exp_branch_muts)
                 self.assertEqual(loglik.mut_edges[e.id], exp_branch_muts)
-                pois_lambda = grid * theta / 2 * exp_span
+                pois_lambda = grid * mut_rate / 2 * exp_span
                 cumul_pois = np.cumsum(self.poisson(pois_lambda, exp_branch_muts))
                 lower_tri = lik.get_mut_lik_lower_tri(e)
                 lower_tri_log = loglik.get_mut_lik_lower_tri(e)
@@ -938,7 +940,8 @@ class TestAlgorithmClass(unittest.TestCase):
         ts = utility_functions.single_tree_ts_n3()
         timepoints1 = np.array([0, 1.2, 2])
         timepoints2 = np.array([0, 1.1, 2])
-        priors = tsdate.build_prior_grid(ts, timepoints1)
+        Ne = 1
+        priors = tsdate.build_prior_grid(ts, Ne, timepoints1)
         lls = Likelihoods(ts, timepoints2)
         self.assertRaisesRegexp(ValueError, "timepoints", InOutAlgorithms, priors, lls)
 
@@ -946,22 +949,25 @@ class TestAlgorithmClass(unittest.TestCase):
         ts1 = utility_functions.single_tree_ts_n3()
         ts2 = utility_functions.single_tree_ts_n2_dangling()
         timepoints = np.array([0, 1.2, 2])
-        priors = tsdate.build_prior_grid(ts1, timepoints)
+        Ne = 1
+        priors = tsdate.build_prior_grid(ts1, Ne, timepoints)
         lls = Likelihoods(ts2, priors.timepoints)
         self.assertRaisesRegexp(ValueError, "fixed", InOutAlgorithms, priors, lls)
 
 
 class TestInsideAlgorithm(unittest.TestCase):
     def run_inside_algorithm(self, ts, prior_distr, normalize=True):
+        Ne = 1
         priors = tsdate.build_prior_grid(
             ts,
+            Ne,
             timepoints=np.array([0, 1.2, 2]),
             approximate_priors=False,
             prior_distribution=prior_distr,
         )
-        theta = 1
         eps = 1e-6
-        lls = Likelihoods(ts, priors.timepoints, theta, eps=eps)
+        mut_rate = 1
+        lls = Likelihoods(ts, priors.timepoints, mut_rate, eps=eps)
         lls.precalculate_mutation_likelihoods()
         algo = InOutAlgorithms(priors, lls)
         algo.inside_pass(normalize=normalize)
@@ -1078,10 +1084,11 @@ class TestInsideAlgorithm(unittest.TestCase):
         ts = utility_functions.single_tree_ts_n2_dangling()
         print(ts.draw_text())
         print("Samples:", ts.samples())
-        priors = tsdate.build_prior_grid(ts, timepoints=np.array([0, 1.2, 2]))
-        theta = 1
+        Ne = 1
+        priors = tsdate.build_prior_grid(ts, Ne, timepoints=np.array([0, 1.2, 2]))
+        mut_rate = 1
         eps = 1e-6
-        lls = Likelihoods(ts, priors.timepoints, theta, eps)
+        lls = Likelihoods(ts, priors.timepoints, mut_rate, eps)
         algo = InOutAlgorithms(priors, lls)
         self.assertRaisesRegexp(ValueError, "dangling", algo.inside_pass)
 
@@ -1095,10 +1102,11 @@ class TestOutsideAlgorithm(unittest.TestCase):
         priors.add(ts.num_samples, approximate=False)
         grid = np.array([0, 1.2, 2])
         mixture_priors = priors.get_mixture_prior_params(span_data)
-        prior_vals = fill_priors(mixture_priors, grid, ts, prior_distr=prior_distr)
-        theta = 1
+        Ne = 1
+        prior_vals = fill_priors(mixture_priors, grid, ts, Ne, prior_distr=prior_distr)
+        mut_rate = 1
         eps = 1e-6
-        lls = Likelihoods(ts, grid, theta, eps=eps)
+        lls = Likelihoods(ts, grid, mut_rate, eps=eps)
         lls.precalculate_mutation_likelihoods()
         algo = InOutAlgorithms(prior_vals, lls)
         algo.inside_pass()
@@ -1137,9 +1145,10 @@ class TestOutsideAlgorithm(unittest.TestCase):
 
     def test_outside_before_inside_fails(self):
         ts = utility_functions.single_tree_ts_n2()
-        priors = tsdate.build_prior_grid(ts)
-        theta = 1
-        lls = Likelihoods(ts, priors.timepoints, theta)
+        Ne = 1
+        priors = tsdate.build_prior_grid(ts, Ne)
+        mut_rate = 1
+        lls = Likelihoods(ts, priors.timepoints, mut_rate)
         lls.precalculate_mutation_likelihoods()
         algo = InOutAlgorithms(priors, lls)
         self.assertRaises(RuntimeError, algo.outside_pass)
@@ -1200,10 +1209,11 @@ class TestTotalFunctionalValueTree(unittest.TestCase):
         priors = ConditionalCoalescentTimes(None, prior_distr=prior_distr)
         priors.add(ts.num_samples, approximate=False)
         mixture_priors = priors.get_mixture_prior_params(span_data)
-        prior_vals = fill_priors(mixture_priors, grid, ts, prior_distr=prior_distr)
-        theta = 1
+        Ne = 1
+        prior_vals = fill_priors(mixture_priors, grid, ts, Ne, prior_distr=prior_distr)
+        mut_rate = 1
         eps = 1e-6
-        lls = Likelihoods(ts, grid, theta, eps=eps)
+        lls = Likelihoods(ts, grid, mut_rate, eps=eps)
         lls.precalculate_mutation_likelihoods()
         algo = InOutAlgorithms(prior_vals, lls)
         algo.inside_pass()
@@ -1267,12 +1277,14 @@ class TestGilTree(unittest.TestCase):
             priors.add(ts.num_samples, approximate=False)
             grid = np.array([0, 0.1, 0.2, 0.5, 1, 2, 5])
             mixture_prior = priors.get_mixture_prior_params(span_data)
-            prior_vals = fill_priors(mixture_prior, grid, ts, prior_distr=prior_distr)
+            prior_vals = fill_priors(
+                mixture_prior, grid, ts, 1, prior_distr=prior_distr
+            )
             prior_vals.grid_data[0] = [0, 0.5, 0.3, 0.1, 0.05, 0.02, 0.03]
             prior_vals.grid_data[1] = [0, 0.05, 0.1, 0.2, 0.45, 0.1, 0.1]
-            theta = 2
+            mut_rate = 2
             eps = 0.01
-            lls = Likelihoods(ts, grid, theta, eps=eps, normalize=False)
+            lls = Likelihoods(ts, grid, mut_rate, eps=eps, normalize=False)
             lls.precalculate_mutation_likelihoods()
             algo = InOutAlgorithms(prior_vals, lls)
             algo.inside_pass(normalize=False, cache_inside=cache_inside)
@@ -1299,12 +1311,13 @@ class TestOutsideEdgesOrdering(unittest.TestCase):
 
     def edges_ordering(self, ts, fn):
         fixed_nodes = set(ts.samples())
-        priors = tsdate.build_prior_grid(ts)
-        theta = None
+        Ne = 1
+        priors = tsdate.build_prior_grid(ts, Ne)
+        mut_rate = None
         liklhd = LogLikelihoods(
             ts,
             priors.timepoints,
-            theta,
+            mut_rate,
             eps=1e-6,
             fixed_node_set=fixed_nodes,
             progress=False,
@@ -1375,15 +1388,15 @@ class TestMaximization(unittest.TestCase):
     """
 
     def run_outside_maximization(self, ts, prior_distr="lognorm"):
-        priors = tsdate.build_prior_grid(ts, prior_distribution=prior_distr)
         Ne = 0.5
-        theta = 1
+        priors = tsdate.build_prior_grid(ts, Ne, prior_distribution=prior_distr)
+        mut_rate = 1
         eps = 1e-6
-        lls = Likelihoods(ts, priors.timepoints, theta, eps=eps)
+        lls = Likelihoods(ts, priors.timepoints, mut_rate, eps=eps)
         lls.precalculate_mutation_likelihoods()
         algo = InOutAlgorithms(priors, lls)
         algo.inside_pass()
-        return lls, algo, algo.outside_maximization(Ne, eps=eps)
+        return lls, algo, algo.outside_maximization(eps=eps)
 
     def test_one_tree_n2(self):
         ts = utility_functions.single_tree_ts_n2()
@@ -1480,6 +1493,7 @@ class TestBuildPriorGrid(unittest.TestCase):
 
     def test_bad_timepoints(self):
         ts = msprime.simulate(2, random_seed=123)
+        Ne = 1
         for bad in [
             -1,
             np.array([1]),
@@ -1487,14 +1501,19 @@ class TestBuildPriorGrid(unittest.TestCase):
             np.array([1, 1, 1]),
             "foobar",
         ]:
-            self.assertRaises(ValueError, tsdate.build_prior_grid, ts, timepoints=bad)
+            self.assertRaises(
+                ValueError, tsdate.build_prior_grid, ts, Ne, timepoints=bad
+            )
         for bad in [np.array(["hello", "there"])]:
-            self.assertRaises(TypeError, tsdate.build_prior_grid, ts, timepoints=bad)
+            self.assertRaises(
+                TypeError, tsdate.build_prior_grid, ts, Ne, timepoints=bad
+            )
 
     def test_bad_prior_distr(self):
         ts = msprime.simulate(2, random_seed=12)
+        Ne = 1
         self.assertRaises(
-            ValueError, tsdate.build_prior_grid, ts, prior_distribution="foobar"
+            ValueError, tsdate.build_prior_grid, ts, Ne, prior_distribution="foobar"
         )
 
 
@@ -1508,9 +1527,7 @@ class TestPosteriorMeanVar(unittest.TestCase):
         grid = np.array([0, 1.2, 2])
         for distr in ("gamma", "lognorm"):
             posterior, algo = TestTotalFunctionalValueTree().find_posterior(ts, distr)
-            ts_node_metadata, mn_post, vr_post = posterior_mean_var(
-                ts, grid, posterior, 0.5
-            )
+            ts_node_metadata, mn_post, vr_post = posterior_mean_var(ts, grid, posterior)
             self.assertTrue(
                 np.array_equal(
                     mn_post, [0, 0, np.sum(grid * posterior[2]) / np.sum(posterior[2])]
@@ -1521,9 +1538,7 @@ class TestPosteriorMeanVar(unittest.TestCase):
         ts = utility_functions.single_tree_ts_n2()
         grid = np.array([0, 1.2, 2])
         posterior, algo = TestTotalFunctionalValueTree().find_posterior(ts, "lognorm")
-        ts_node_metadata, mn_post, vr_post = posterior_mean_var(
-            ts, grid, posterior, 0.5
-        )
+        ts_node_metadata, mn_post, vr_post = posterior_mean_var(ts, grid, posterior)
         self.assertTrue(
             json.loads(ts_node_metadata.node(2).metadata)["mn"] == mn_post[2]
         )
@@ -1706,12 +1721,12 @@ class TestNodeTimes(unittest.TestCase):
             10, mutation_rate=1, recombination_rate=1, length=20
         )
         dated = date(larger_ts, 10000)
-        node_ages = nodes_time(dated)
+        node_ages = nodes_time_unconstrained(dated)
         self.assertTrue(np.all(dated.tables.nodes.time[:] >= node_ages))
 
     def test_fails_unconstrained(self):
         ts = utility_functions.two_tree_mutation_ts()
-        self.assertRaises(ValueError, nodes_time, ts, unconstrained=True)
+        self.assertRaises(ValueError, nodes_time_unconstrained, ts)
 
 
 class TestSiteTimes(unittest.TestCase):
@@ -1723,10 +1738,10 @@ class TestSiteTimes(unittest.TestCase):
         ts = utility_functions.two_tree_ts()
         self.assertRaises(ValueError, tsdate.sites_time_from_ts, ts)
 
-    def test_mutation_age_param(self):
+    def test_node_selection_param(self):
         ts = utility_functions.two_tree_mutation_ts()
         self.assertRaises(
-            ValueError, tsdate.sites_time_from_ts, ts, mutation_age="sibling"
+            ValueError, tsdate.sites_time_from_ts, ts, node_selection="sibling"
         )
 
     def test_sites_time_insideoutside(self):
@@ -1736,13 +1751,13 @@ class TestSiteTimes(unittest.TestCase):
         self.assertTrue(
             np.array_equal(
                 mn_post[ts.tables.mutations.node],
-                tsdate.sites_time_from_ts(dated, unconstrained=True),
+                tsdate.sites_time_from_ts(dated, unconstrained=True, min_time=0),
             )
         )
         self.assertTrue(
             np.array_equal(
                 dated.tables.nodes.time[ts.tables.mutations.node],
-                tsdate.sites_time_from_ts(dated, unconstrained=False),
+                tsdate.sites_time_from_ts(dated, unconstrained=False, min_time=0),
             )
         )
 
@@ -1752,20 +1767,24 @@ class TestSiteTimes(unittest.TestCase):
         self.assertTrue(
             np.array_equal(
                 dated.tables.nodes.time[ts.tables.mutations.node],
-                tsdate.sites_time_from_ts(dated, unconstrained=False),
+                tsdate.sites_time_from_ts(dated, unconstrained=False, min_time=0),
             )
         )
 
-    def test_sites_time_mutation_age(self):
+    def test_sites_time_node_selection(self):
         ts = utility_functions.two_tree_mutation_ts()
         dated = tsdate.date(ts, Ne=1, mutation_rate=1)
-        sites_time_child = tsdate.sites_time_from_ts(dated, mutation_age="child")
-        dated_nodes_time = nodes_time(dated)
+        sites_time_child = tsdate.sites_time_from_ts(
+            dated, node_selection="child", min_time=0
+        )
+        dated_nodes_time = nodes_time_unconstrained(dated)
         self.assertTrue(
             np.array_equal(dated_nodes_time[ts.tables.mutations.node], sites_time_child)
         )
 
-        sites_time_parent = tsdate.sites_time_from_ts(dated, mutation_age="parent")
+        sites_time_parent = tsdate.sites_time_from_ts(
+            dated, node_selection="parent", min_time=0
+        )
         parent_sites_check = np.zeros(dated.num_sites)
         for tree in dated.trees():
             for site in tree.sites():
@@ -1776,7 +1795,7 @@ class TestSiteTimes(unittest.TestCase):
         self.assertTrue(np.array_equal(parent_sites_check, sites_time_parent))
 
         sites_time_arithmetic = tsdate.sites_time_from_ts(
-            dated, mutation_age="arithmetic"
+            dated, node_selection="arithmetic", min_time=0
         )
         arithmetic_sites_check = np.zeros(dated.num_sites)
         for tree in dated.trees():
@@ -1789,7 +1808,7 @@ class TestSiteTimes(unittest.TestCase):
         self.assertTrue(np.array_equal(arithmetic_sites_check, sites_time_arithmetic))
 
         sites_time_geometric = tsdate.sites_time_from_ts(
-            dated, mutation_age="geometric"
+            dated, node_selection="geometric", min_time=0
         )
         geometric_sites_check = np.zeros(dated.num_sites)
         for tree in dated.trees():
@@ -1801,45 +1820,52 @@ class TestSiteTimes(unittest.TestCase):
                     )
         self.assertTrue(np.array_equal(geometric_sites_check, sites_time_geometric))
 
-    def test_sites_time_multiallelic(self):
-        ts = utility_functions.single_tree_ts_2mutations_multiallelic_n3()
-        sites_time = tsdate.sites_time_from_ts(ts, unconstrained=False)
-        self.assertTrue(
-            np.array_equal(
-                [np.max(ts.tables.nodes.time[ts.tables.mutations.node])], sites_time
-            )
-        )
-        sites_time = tsdate.sites_time_from_ts(
-            ts, unconstrained=False, ignore_multiallelic=False
-        )
-        self.assertTrue(math.isnan(sites_time[0]))
-
     def test_sites_time_singletons(self):
+        """Singletons should be allocated min_time"""
         ts = utility_functions.single_tree_ts_2mutations_singletons_n3()
+        sites_time = tsdate.sites_time_from_ts(ts, unconstrained=False, min_time=0)
+        self.assertTrue(np.array_equal(sites_time, [0]))
         sites_time = tsdate.sites_time_from_ts(ts, unconstrained=False)
-        self.assertTrue(np.array_equal(sites_time, [1e-6]))
+        self.assertTrue(np.array_equal(sites_time, [1]))
+
+    def test_sites_time_nonvariable(self):
+        ts = utility_functions.single_tree_ts_2mutations_singletons_n3()
+        tables = ts.dump_tables()
+        tables.mutations.clear()
+        ts = tables.tree_sequence()
+        sites_time = tsdate.sites_time_from_ts(ts, unconstrained=False)
+        self.assertTrue(np.all(np.isnan(sites_time)))
+
+    def test_sites_time_root_mutation(self):
+        ts = utility_functions.single_tree_ts_2mutations_singletons_n3()
+        tables = ts.dump_tables()
+        tables.mutations.clear()
+        tables.mutations.add_row(site=0, derived_state="1", node=ts.first().root)
+        ts = tables.tree_sequence()
+        sites_time = tsdate.sites_time_from_ts(ts, unconstrained=False)
+        self.assertEqual(sites_time[0], ts.node(ts.first().root).time)
 
     def test_sites_time_multiple_mutations(self):
         ts = utility_functions.single_tree_ts_2mutations_n3()
         sites_time = tsdate.sites_time_from_ts(ts, unconstrained=False)
-        self.assertTrue(np.array_equal(sites_time, [1]))
+        self.assertTrue(np.array_equal(sites_time, [10]))
 
     def test_sites_time_simulated(self):
         larger_ts = msprime.simulate(
             10, mutation_rate=1, recombination_rate=1, length=20
         )
-        _, mn_post, _, _, eps, _ = get_dates(larger_ts, 10000)
+        _, mn_post, _, _, _, _ = get_dates(larger_ts, 10000)
         dated = date(larger_ts, 10000)
         self.assertTrue(
             np.array_equal(
                 mn_post[larger_ts.tables.mutations.node],
-                tsdate.sites_time_from_ts(dated, unconstrained=True),
+                tsdate.sites_time_from_ts(dated, unconstrained=True, min_time=0),
             )
         )
         self.assertTrue(
             np.array_equal(
                 dated.tables.nodes.time[larger_ts.tables.mutations.node],
-                tsdate.sites_time_from_ts(dated, unconstrained=False),
+                tsdate.sites_time_from_ts(dated, unconstrained=False, min_time=0),
             )
         )
 

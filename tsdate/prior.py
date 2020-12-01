@@ -945,7 +945,7 @@ def create_timepoints(base_priors, prior_distr, n_points=21):
     return np.insert(t_set, 0, 0)
 
 
-def fill_priors(node_parameters, timepoints, ts, *, prior_distr, progress=False):
+def fill_priors(node_parameters, timepoints, ts, Ne, *, prior_distr, progress=False):
     """
     Take the alpha and beta values from the node_parameters array, which contains
     one row for each node in the TS (including fixed nodes)
@@ -979,7 +979,9 @@ def fill_priors(node_parameters, timepoints, ts, *, prior_distr, progress=False)
         datable_nodes, desc="Assign Prior to Each Node", disable=not progress
     ):
         with np.errstate(divide="ignore", invalid="ignore"):
-            prior_node = cdf_func(timepoints, main_param[node], scale=scale_param[node])
+            prior_node = (
+                cdf_func(timepoints, main_param[node], scale=scale_param[node]) * 4 * Ne
+            )
         # force age to be less than max value
         prior_node = np.divide(prior_node, np.max(prior_node))
         # prior in each epoch
@@ -991,6 +993,7 @@ def fill_priors(node_parameters, timepoints, ts, *, prior_distr, progress=False)
 
 def build_grid(
     tree_sequence,
+    Ne,
     timepoints=20,
     *,
     approximate_priors=False,
@@ -1005,7 +1008,9 @@ def build_grid(
     time slices at which to evaluate node age.
 
     :param TreeSequence tree_sequence: The input :class:`tskit.TreeSequence`, treated as
-        undated
+        undated.
+    :param float Ne: The estimated (diploid) effective population size: must be
+        specified.
     :param int_or_array_like timepoints: The number of quantiles used to create the
         time slices, or manually-specified time slices as a numpy array. Default: 20
     :param bool approximate_priors: Whether to use a precalculated approximate prior or
@@ -1073,6 +1078,7 @@ def build_grid(
         prior_params,
         timepoints,
         tree_sequence,
+        Ne,
         prior_distr=prior_distribution,
         progress=progress,
     )

@@ -169,7 +169,9 @@ class TestSimulated(unittest.TestCase):
             recombination_rate=1e-8,
             random_seed=11,
         )
-        priors = tsdate.build_prior_grid(ts, timepoints=10, approximate_priors=None)
+        priors = tsdate.build_prior_grid(
+            ts, Ne=10000, timepoints=10, approximate_priors=None
+        )
         dated_ts = tsdate.date(
             ts, Ne=10000, mutation_rate=1e-8, priors=priors, probability_space=LIN
         )
@@ -209,8 +211,8 @@ class TestSimulated(unittest.TestCase):
                     continue
             tables.edges.add_row(**attr.asdict(row))
         multiroot_ts = tables.tree_sequence()
-        good_priors = tsdate.build_prior_grid(ts)
-        self.assertRaises(ValueError, tsdate.build_prior_grid, multiroot_ts)
+        good_priors = tsdate.build_prior_grid(ts, Ne=1)
+        self.assertRaises(ValueError, tsdate.build_prior_grid, multiroot_ts, Ne=1)
         self.assertRaises(ValueError, tsdate.date, multiroot_ts, 1, 2)
         self.assertRaises(
             ValueError, tsdate.date, multiroot_ts, 1, 2, None, good_priors
