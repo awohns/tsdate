@@ -28,6 +28,7 @@ import unittest
 import attr
 import msprime
 import numpy as np
+import pytest
 import tsinfer
 import utility_functions
 
@@ -43,34 +44,33 @@ class TestPrebuilt(unittest.TestCase):
 
     def test_dangling_failure(self):
         ts = utility_functions.single_tree_ts_n2_dangling()
-        self.assertRaisesRegexp(ValueError, "dangling", tsdate.date, ts, Ne=1)
+        with pytest.raises(ValueError, match="dangling"):
+            tsdate.date(ts, Ne=1)
 
     def test_unary_warning(self):
         with self.assertLogs(level="WARNING") as log:
             tsdate.date(utility_functions.single_tree_ts_with_unary(), Ne=1)
-            self.assertEqual(len(log.output), 1)
-            self.assertIn("unary nodes", log.output[0])
+            assert len(log.output) == 1
+            assert "unary nodes" in log.output[0]
 
     def test_fails_with_recombination(self):
         ts = utility_functions.two_tree_mutation_ts()
         for probability_space in (LOG, LIN):
-            self.assertRaises(
-                NotImplementedError,
-                tsdate.date,
-                ts,
-                Ne=1,
-                recombination_rate=1,
-                probability_space=probability_space,
-            )
-            self.assertRaises(
-                NotImplementedError,
-                tsdate.date,
-                ts,
-                Ne=1,
-                recombination_rate=1,
-                probability_space=probability_space,
-                mutation_rate=1,
-            )
+            with pytest.raises(NotImplementedError):
+                tsdate.date(
+                    ts,
+                    Ne=1,
+                    recombination_rate=1,
+                    probability_space=probability_space,
+                )
+            with pytest.raises(NotImplementedError):
+                tsdate.date(
+                    ts,
+                    Ne=1,
+                    recombination_rate=1,
+                    probability_space=probability_space,
+                    mutation_rate=1,
+                )
 
     def test_intervals(self):
         ts = utility_functions.two_tree_ts()
@@ -80,52 +80,49 @@ class TestPrebuilt(unittest.TestCase):
         dated_ts = tsdate.date(ts, Ne=1)
         dated_keep_ts = tsdate.date(keep_ts, Ne=1)
         dated_deleted_ts = tsdate.date(delete_ts, Ne=1)
-        self.assertTrue(
-            np.allclose(
-                dated_ts.tables.nodes.time[:], dated_keep_ts.tables.nodes.time[:]
-            )
+        assert np.allclose(
+            dated_ts.tables.nodes.time[:], dated_keep_ts.tables.nodes.time[:]
         )
-        self.assertTrue(
-            np.allclose(
-                dated_ts.tables.nodes.time[:], dated_deleted_ts.tables.nodes.time[:]
-            )
+        assert np.allclose(
+            dated_ts.tables.nodes.time[:], dated_deleted_ts.tables.nodes.time[:]
         )
 
 
-class TestSimulated(unittest.TestCase):
+class TestSimulated:
     """
     Tests for tsdate on simulated tree sequences.
     """
 
     def ts_equal_except_times(self, ts1, ts2):
-        self.assertEqual(ts1.sequence_length, ts2.sequence_length)
+        assert ts1.sequence_length == ts2.sequence_length
         t1 = ts1.tables
         t2 = ts2.tables
-        self.assertEqual(t1.sites, t2.sites)
-        self.assertEqual(t1.mutations, t2.mutations)
+        assert t1.sites == t2.sites
         # Edges may have been re-ordered, since sortedness requirements specify
         # they are sorted by parent time, and the relative order of
         # (unconnected) parent nodes might have changed due to time inference
-        self.assertEquals(set(t1.edges), set(t2.edges))
+        assert set(t1.edges) == set(t2.edges)
         # The dated and undated tree sequences should not have the same node times
-        self.assertTrue(
-            not np.array_equal(ts1.tables.nodes.time, ts2.tables.nodes.time)
-        )
-        # New tree sequence will have node times in metadata
+        assert not np.array_equal(ts1.tables.nodes.time, ts2.tables.nodes.time)
+        # New tree sequence will have node times in metadata and all mutation times
+        # set to tskit.UNKNOWN_TIME
         for column_name in t1.nodes.column_names:
             if column_name not in ["time", "metadata", "metadata_offset"]:
                 col_t1 = getattr(t1.nodes, column_name)
                 col_t2 = getattr(t2.nodes, column_name)
-                self.assertTrue(np.array_equal(col_t1, col_t2))
+                assert np.array_equal(col_t1, col_t2)
+        for column_name in t1.mutations.column_names:
+            if column_name not in ["time"]:
+                col_t1 = getattr(t1.mutations, column_name)
+                col_t2 = getattr(t2.mutations, column_name)
+                assert np.array_equal(col_t1, col_t2)
         # Assert that last provenance shows tree sequence was dated
-        self.assertEqual(len(t1.provenances), len(t2.provenances) - 1)
+        assert len(t1.provenances) == len(t2.provenances) - 1
         for index, (prov1, prov2) in enumerate(zip(t1.provenances, t2.provenances)):
-            self.assertEqual(prov1, prov2)
+            assert prov1 == prov2
             if index == len(t1.provenances) - 1:
                 break
-        self.assertEqual(
-            json.loads(t2.provenances[-1].record)["software"]["name"], "tsdate"
-        )
+        assert json.loads(t2.provenances[-1].record)["software"]["name"] == "tsdate"
 
     def test_simple_sim_1_tree(self):
         ts = msprime.simulate(8, mutation_rate=5, random_seed=2)
@@ -136,7 +133,7 @@ class TestSimulated(unittest.TestCase):
 
     def test_simple_sim_multi_tree(self):
         ts = msprime.simulate(8, mutation_rate=5, recombination_rate=5, random_seed=2)
-        self.assertGreater(ts.num_trees, 1)
+        assert ts.num_trees > 1
         max_dated_ts = tsdate.date(ts, Ne=1, mutation_rate=5, method="maximization")
         self.ts_equal_except_times(ts, max_dated_ts)
         io_dated_ts = tsdate.date(ts, Ne=1, mutation_rate=5)
@@ -212,11 +209,12 @@ class TestSimulated(unittest.TestCase):
             tables.edges.add_row(**attr.asdict(row))
         multiroot_ts = tables.tree_sequence()
         good_priors = tsdate.build_prior_grid(ts, Ne=1)
-        self.assertRaises(ValueError, tsdate.build_prior_grid, multiroot_ts, Ne=1)
-        self.assertRaises(ValueError, tsdate.date, multiroot_ts, 1, 2)
-        self.assertRaises(
-            ValueError, tsdate.date, multiroot_ts, 1, 2, None, good_priors
-        )
+        with pytest.raises(ValueError):
+            tsdate.build_prior_grid(multiroot_ts, Ne=1)
+        with pytest.raises(ValueError):
+            tsdate.date(multiroot_ts, 1, 2)
+        with pytest.raises(ValueError):
+            tsdate.date(multiroot_ts, 1, 2, None, good_priors)
 
     def test_non_contemporaneous(self):
         samples = [
@@ -225,10 +223,18 @@ class TestSimulated(unittest.TestCase):
             msprime.Sample(population=0, time=0),
             msprime.Sample(population=0, time=1.0),
         ]
-        ts = msprime.simulate(samples=samples, Ne=1, mutation_rate=2)
-        self.assertRaises(NotImplementedError, tsdate.date, ts, 1, 2)
+        ts = msprime.simulate(samples=samples, Ne=1, mutation_rate=2, random_seed=12)
+        with pytest.raises(NotImplementedError):
+            tsdate.date(ts, 1, 2)
 
-    @unittest.skip("YAN to fix")
+    @pytest.mark.skip("Add when msprime 1.0 is released")
+    def test_no_mutation_times(self):
+        ts = msprime.simulate(20, Ne=1, mutation_rate=1, random_seed=12)
+        assert np.all(ts.tables.mutations.time > 0)
+        dated = tsdate.date(ts, 1, 1)
+        assert np.all(np.isnan(dated.tables.mutations.time))
+
+    @pytest.mark.skip("YAN to fix")
     def test_truncated_ts(self):
         Ne = 1e2
         mu = 2e-4
@@ -250,7 +256,7 @@ class TestSimulated(unittest.TestCase):
         self.ts_equal_except_times(truncated_ts, dated_ts)
 
 
-class TestInferred(unittest.TestCase):
+class TestInferred:
     """
     Tests for tsdate on simulated then inferred tree sequences.
     """
@@ -265,19 +271,17 @@ class TestInferred(unittest.TestCase):
             max_dated_ts = tsdate.date(
                 inferred_ts, Ne=1, mutation_rate=5, method="maximization"
             )
-            self.assertTrue(
-                all(
-                    [a == b for a, b in zip(ts.haplotypes(), max_dated_ts.haplotypes())]
-                )
+            assert all(
+                [a == b for a, b in zip(ts.haplotypes(), max_dated_ts.haplotypes())]
             )
             io_dated_ts = tsdate.date(inferred_ts, Ne=1, mutation_rate=5)
-            self.assertTrue(
-                all([a == b for a, b in zip(ts.haplotypes(), io_dated_ts.haplotypes())])
+            assert all(
+                [a == b for a, b in zip(ts.haplotypes(), io_dated_ts.haplotypes())]
             )
 
     def test_simple_sim_multi_tree(self):
         ts = msprime.simulate(8, mutation_rate=5, recombination_rate=5, random_seed=2)
-        self.assertGreater(ts.num_trees, 1)
+        assert ts.num_trees > 1
         for use_times in [True, False]:
             sample_data = tsinfer.SampleData.from_tree_sequence(
                 ts, use_sites_time=use_times
@@ -286,12 +290,10 @@ class TestInferred(unittest.TestCase):
             max_dated_ts = tsdate.date(
                 inferred_ts, Ne=1, mutation_rate=5, method="maximization"
             )
-            self.assertTrue(
-                all(
-                    [a == b for a, b in zip(ts.haplotypes(), max_dated_ts.haplotypes())]
-                )
+            assert all(
+                [a == b for a, b in zip(ts.haplotypes(), max_dated_ts.haplotypes())]
             )
             io_dated_ts = tsdate.date(inferred_ts, Ne=1, mutation_rate=5)
-            self.assertTrue(
-                all([a == b for a, b in zip(ts.haplotypes(), io_dated_ts.haplotypes())])
+            assert all(
+                [a == b for a, b in zip(ts.haplotypes(), io_dated_ts.haplotypes())]
             )
